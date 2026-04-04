@@ -4,8 +4,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 st.set_page_config(
@@ -16,8 +18,9 @@ st.set_page_config(
 )
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-COLORS       = {"Graduate": "#4CAF50", "Dropout": "#F44336", "Enrolled": "#2196F3"}
-STATUS_ORDER = ["Graduate", "Enrolled", "Dropout"]
+# Enrolled dihapus sesuai notebook (df = df[df['Status'] != 'Enrolled'].copy())
+COLORS       = {"Graduate": "#4CAF50", "Dropout": "#F44336"}
+STATUS_ORDER = ["Graduate", "Dropout"]
 
 plt.rcParams.update({
     "figure.facecolor": "white",
@@ -27,7 +30,6 @@ plt.rcParams.update({
 })
 
 # ── Exact feature order used during notebook training ────────────────────────
-# (taken from X = df.drop(columns=['Status']) on the original dataset)
 FEATURE_COLS = [
     "Marital_status", "Application_mode", "Application_order", "Course",
     "Daytime_evening_attendance", "Previous_qualification",
@@ -55,20 +57,22 @@ def load_data():
 @st.cache_resource
 def train_model():
     """
-    Mirrors the notebook preprocessing exactly:
-    - LabelEncoder on Status  (Dropout→0, Enrolled→1, Graduate→2)
+    Mirrors notebook preprocessing exactly:
+    - Drop 'Enrolled' rows (binary classification: Graduate vs Dropout)
+    - LabelEncoder on Status  (Dropout→0, Graduate→1)
     - X = df.drop('Status'), column order preserved from dataset
     - 80/20 stratified split, random_state=42
-    - StandardScaler fit on train only
-    - LogisticRegression(max_iter=1000, random_state=42)
-    The notebook's export cell had a bug (exported last loop variable 'model'
-    which was GradientBoosting, not LogisticRegression), so we retrain here.
+    - StandardScaler fit on train only (applied only to Logistic Regression)
+    - Train 4 models, pick best by Test Accuracy
     """
-    df = load_data()
+    df_raw = load_data()
+
+    # ── Sesuai notebook: drop kelas 'Enrolled' ────────────────────────────────
+    df = df_raw[df_raw["Status"] != "Enrolled"].copy()
 
     le = LabelEncoder()
-    y  = le.fit_transform(df["Status"])           # Dropout=0, Enrolled=1, Graduate=2
-    X  = df[FEATURE_COLS]                         # fixed column order
+    y  = le.fit_transform(df["Status"])   # Dropout=0, Graduate=1
+    X  = df[FEATURE_COLS]
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
@@ -78,22 +82,46 @@ def train_model():
     X_train_sc  = scaler.fit_transform(X_train)
     X_test_sc   = scaler.transform(X_test)
 
-    logreg = LogisticRegression(max_iter=1000, random_state=42)
-    logreg.fit(X_train_sc, y_train)
+    # ── 4 model sesuai notebook ───────────────────────────────────────────────
+    models = {
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+        "Decision Tree":       DecisionTreeClassifier(max_depth=6, random_state=42),
+        "Random Forest":       RandomForestClassifier(n_estimators=100, random_state=42),
+        "Gradient Boosting":   GradientBoostingClassifier(n_estimators=100, random_state=42),
+    }
 
-    y_pred = logreg.predict(X_test_sc)
-    acc    = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred,
+    results = []
+    for name, model in models.items():
+        Xtr = X_train_sc if name == "Logistic Regression" else X_train
+        Xte = X_test_sc  if name == "Logistic Regression" else X_test
+
+        model.fit(Xtr, y_train)
+        y_pred = model.predict(Xte)
+
+        acc = accuracy_score(y_test, y_pred)
+        cv  = cross_val_score(model, Xtr, y_train, cv=5, scoring="accuracy").mean()
+        results.append({"Model": name, "Test Accuracy": acc, "CV Accuracy (5-fold)": cv})
+
+    results_df = pd.DataFrame(results).sort_values("Test Accuracy", ascending=False)
+
+    # ── Best model ────────────────────────────────────────────────────────────
+    best_name  = results_df.iloc[0]["Model"]
+    best_model = models[best_name]
+    Xte_best   = X_test_sc if best_name == "Logistic Regression" else X_test
+    y_pred_best = best_model.predict(Xte_best)
+
+    acc    = accuracy_score(y_test, y_pred_best)
+    report = classification_report(y_test, y_pred_best,
                                    target_names=le.classes_, output_dict=True)
-    cm     = confusion_matrix(y_test, y_pred)
+    cm     = confusion_matrix(y_test, y_pred_best)
 
-    return logreg, scaler, le, acc, report, cm
+    return best_model, best_name, scaler, le, acc, report, cm, results_df, df
 
 
-df                            = load_data()
-logreg, scaler, le, acc, report, cm = train_model()
+df_full                                                   = load_data()
+best_model, best_name, scaler, le, acc, report, cm, results_df, df = train_model()
 
-# Compute dataset-wide medians for sensible prediction defaults
+# Medians dihitung dari dataset SETELAH drop Enrolled (sesuai training data)
 MEDIANS = df[FEATURE_COLS].median().to_dict()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -102,12 +130,13 @@ with st.sidebar:
     st.markdown("---")
     page = st.radio("Menu", [
         "📊 Analysis",
+        "🤖 Model Comparison",
         "🔮 Prediction",
         "📝 Recommendations",
     ], label_visibility="collapsed")
     st.markdown("---")
-    st.caption(f"📁 {len(df):,} students · {df.shape[1]} features")
-    st.caption(f"🤖 Logistic Regression · Acc: **{acc:.2%}**")
+    st.caption(f"📁 {len(df):,} students (Graduate & Dropout)")
+    st.caption(f"🤖 Best: **{best_name}** · Acc: **{acc:.2%}**")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -115,17 +144,16 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "📊 Analysis":
     st.title("📊 Student Performance Analysis")
+    st.info("ℹ️ Analisis dilakukan pada data **Graduate & Dropout** saja — kelas *Enrolled* dieksklusikan sesuai preprocessing notebook.", icon="ℹ️")
 
     total    = len(df)
     graduate = (df["Status"] == "Graduate").sum()
     dropout  = (df["Status"] == "Dropout").sum()
-    enrolled = (df["Status"] == "Enrolled").sum()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("👥 Total Students", f"{total:,}")
-    c2.metric("🎓 Graduate",  f"{graduate:,}",  f"{graduate/total*100:.1f}%")
-    c3.metric("⚠️ Dropout",   f"{dropout:,}",   f"{dropout/total*100:.1f}%", delta_color="inverse")
-    c4.metric("📚 Enrolled",  f"{enrolled:,}",  f"{enrolled/total*100:.1f}%")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("👥 Total Students",  f"{total:,}")
+    c2.metric("🎓 Graduate",  f"{graduate:,}", f"{graduate/total*100:.1f}%")
+    c3.metric("⚠️ Dropout",   f"{dropout:,}",  f"{dropout/total*100:.1f}%", delta_color="inverse")
     st.markdown("---")
 
     # ── Row 1: VIZ 1 & 2 ─────────────────────────────────────────────────────
@@ -269,11 +297,95 @@ if page == "📊 Analysis":
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE 2 — PREDICTION
+# PAGE 2 — MODEL COMPARISON (BARU: sesuai notebook Cell 35 & 36)
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "🤖 Model Comparison":
+    st.title("🤖 Model Comparison")
+    st.markdown("Perbandingan 4 model sesuai notebook: Logistic Regression, Decision Tree, Random Forest, Gradient Boosting.")
+    st.markdown("---")
+
+    # ── Tabel hasil ──────────────────────────────────────────────────────────
+    st.subheader("📋 Hasil Perbandingan Model")
+    display_df = results_df.copy()
+    display_df["Test Accuracy"]       = display_df["Test Accuracy"].map("{:.4f}".format)
+    display_df["CV Accuracy (5-fold)"] = display_df["CV Accuracy (5-fold)"].map("{:.4f}".format)
+    st.dataframe(display_df, hide_index=True, use_container_width=True)
+
+    st.success(f"🏆 Best Model: **{best_name}** — Test Accuracy **{acc:.2%}**")
+    st.markdown("---")
+
+    # ── Bar chart perbandingan ────────────────────────────────────────────────
+    st.subheader("📊 Visualisasi Perbandingan Akurasi")
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = np.arange(len(results_df))
+    width = 0.35
+
+    b1 = ax.bar(x - width/2, results_df["Test Accuracy"].astype(float),        width,
+                label="Test Accuracy",        color="#2196F3", alpha=0.85)
+    b2 = ax.bar(x + width/2, results_df["CV Accuracy (5-fold)"].astype(float), width,
+                label="CV Accuracy (5-fold)", color="#FF9800", alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(results_df["Model"], fontsize=11)
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel("Accuracy Score", fontsize=12)
+    ax.set_title("Perbandingan Performa Model", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=11)
+
+    for bars in [b1, b2]:
+        for bar in bars:
+            ax.annotate(f"{bar.get_height():.3f}",
+                        xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                        xytext=(0, 3), textcoords="offset points",
+                        ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+    plt.close()
+
+    st.markdown("---")
+
+    # ── Confusion Matrix & Classification Report best model ───────────────────
+    st.subheader(f"📉 Detail Best Model: {best_name}")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        rows = []
+        for cls in le.classes_:
+            r = report[cls]
+            rows.append({
+                "Class":     cls,
+                "Precision": f"{r['precision']:.3f}",
+                "Recall":    f"{r['recall']:.3f}",
+                "F1-Score":  f"{r['f1-score']:.3f}",
+                "Support":   int(r["support"]),
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    with col2:
+        labels = list(le.classes_)
+        fig, ax = plt.subplots(figsize=(5, 3.5))
+        im = ax.imshow(cm, cmap="Blues")
+        ax.set_xticks(range(len(labels))); ax.set_xticklabels(labels, fontsize=9)
+        ax.set_yticks(range(len(labels))); ax.set_yticklabels(labels, fontsize=9)
+        ax.set_xlabel("Predicted"); ax.set_ylabel("Actual")
+        ax.set_title(f"Confusion Matrix — {best_name}", fontsize=11, fontweight="bold")
+        for i in range(len(labels)):
+            for j in range(len(labels)):
+                ax.text(j, i, f"{cm[i,j]:,}", ha="center", va="center",
+                        fontsize=11, fontweight="bold",
+                        color="white" if cm[i,j] > cm.max()/2 else "black")
+        plt.colorbar(im, ax=ax, fraction=0.04)
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True); plt.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 3 — PREDICTION
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🔮 Prediction":
     st.title("🔮 Student Status Prediction")
-    st.markdown("Model: **Logistic Regression** — preprocessing identik dengan notebook (StandardScaler, kolom sama, split sama).")
+    st.markdown(f"Model: **{best_name}** (best model dari notebook) — Binary: **Graduate** vs **Dropout**.")
     st.markdown("---")
 
     c1, c2, c3 = st.columns(3)
@@ -308,7 +420,6 @@ elif page == "🔮 Prediction":
     international = c3.selectbox("International", ["No", "Yes"])
 
     if st.button("🔍 Predict", use_container_width=True, type="primary"):
-        # Start from dataset medians so every unshown feature has a sensible value
         row = MEDIANS.copy()
         row.update({
             "Previous_qualification_grade":              prev_grade,
@@ -331,15 +442,19 @@ elif page == "🔮 Prediction":
             "International":              1 if international == "Yes"     else 0,
         })
 
-        # Build input in EXACT same column order as training
-        X_input  = pd.DataFrame([row])[FEATURE_COLS]
-        X_scaled = scaler.transform(X_input)
-        proba    = logreg.predict_proba(X_scaled)[0]
+        X_input = pd.DataFrame([row])[FEATURE_COLS]
 
+        # Scaling hanya untuk Logistic Regression (sesuai notebook)
+        if best_name == "Logistic Regression":
+            X_proc = scaler.transform(X_input)
+        else:
+            X_proc = X_input.values
+
+        proba      = best_model.predict_proba(X_proc)[0]
         pred_label = le.classes_[np.argmax(proba)]
         pred_prob  = proba[np.argmax(proba)]
         color = COLORS[pred_label]
-        icon  = {"Graduate": "🎓", "Dropout": "⚠️", "Enrolled": "📚"}[pred_label]
+        icon  = {"Graduate": "🎓", "Dropout": "⚠️"}[pred_label]
 
         st.markdown(
             f"<div style='background:{color}18;border-left:6px solid {color};"
@@ -350,10 +465,10 @@ elif page == "🔮 Prediction":
             f"</div>", unsafe_allow_html=True,
         )
 
-        fig, ax = plt.subplots(figsize=(6, 3))
+        fig, ax = plt.subplots(figsize=(5, 3))
         bars = ax.bar(le.classes_, proba * 100,
                       color=[COLORS[c] for c in le.classes_],
-                      edgecolor="white", alpha=0.9, width=0.5)
+                      edgecolor="white", alpha=0.9, width=0.4)
         ax.set_ylim(0, 115)
         ax.set_ylabel("Probability (%)")
         ax.set_title("Class Probabilities", fontsize=12, fontweight="bold")
@@ -365,19 +480,17 @@ elif page == "🔮 Prediction":
 
         if pred_label == "Dropout":
             st.error("⚠️ Risiko dropout tinggi. Rekomendasikan konseling akademik segera dan review kondisi finansial mahasiswa.")
-        elif pred_label == "Enrolled":
-            st.warning("📚 Mahasiswa masih berjalan — pantau progres akademik dan kewajiban keuangan secara berkala.")
         else:
             st.success("🎓 Mahasiswa on track untuk lulus. Pertahankan dukungan yang ada!")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PAGE 3 — RECOMMENDATIONS
+# PAGE 4 — RECOMMENDATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "📝 Recommendations":
     st.title("📝 Kesimpulan & Rekomendasi")
 
-    st.success(f"🏆 Model **Logistic Regression** — Test Accuracy **{acc:.2%}**")
+    st.success(f"🏆 Best Model: **{best_name}** — Test Accuracy **{acc:.2%}** (Binary: Graduate vs Dropout)")
 
     # ── Model report ──────────────────────────────────────────────────────────
     st.markdown("---")
@@ -443,7 +556,7 @@ elif page == "📝 Recommendations":
         ("#F44336", "🔴 HIGH",   "Program konseling khusus untuk mahasiswa berstatus debtor — hubungkan ke sumber beasiswa eksternal dan manajemen keuangan."),
         ("#FF9800", "🟡 MEDIUM", "Buat program pendampingan untuk mahasiswa non-tradisional (usia >23) dengan jadwal fleksibel dan mentoring karier."),
         ("#FF9800", "🟡 MEDIUM", "Perluas kuota beasiswa internal dan sosialisasikan beasiswa eksternal lebih agresif ke mahasiswa at-risk."),
-        ("#4CAF50", "🟢 LOW",    f"Integrasikan model Logistic Regression ke Sistem Informasi Akademik (SIAK) sebagai risk-score real-time per mahasiswa per semester."),
+        ("#4CAF50", "🟢 LOW",    f"Integrasikan model {best_name} ke Sistem Informasi Akademik (SIAK) sebagai risk-score real-time per mahasiswa per semester."),
     ]
     for color, priority, text in actions:
         st.markdown(
@@ -460,7 +573,7 @@ elif page == "📝 Recommendations":
     roadmap = pd.DataFrame({
         "Initiative":    ["Early Warning System", "SPP Intervention",
                           "Debt Counselling",     "Non-trad Support",
-                          "Scholarship Expansion","SIAK Integration"],
+                          "Scholarship Expansion", "SIAK Integration"],
         "Start":         [1, 1, 2, 3, 3, 5],
         "Duration":      [4, 4, 3, 3, 3, 3],
         "Priority":      ["High","High","High","Medium","Medium","Low"],
@@ -486,8 +599,9 @@ elif page == "📝 Recommendations":
 
     st.markdown("---")
     st.info(
-        "💬 **Kesimpulan:** Dropout mahasiswa bisa diprediksi dengan akurasi **~77%** menggunakan "
-        "Logistic Regression. Intervensi dengan ROI tertinggi ada di sisi finansial — "
-        "SPP dan utang. Mengintegrasikan model ke SIAK memungkinkan konselor bertindak "
-        "sebelum mahasiswa benar-benar keluar."
+        f"💬 **Kesimpulan:** Dropout mahasiswa bisa diprediksi (binary: Graduate vs Dropout) "
+        f"dengan **{best_name}** yang mencapai akurasi **{acc:.2%}**. "
+        f"Intervensi dengan ROI tertinggi ada di sisi finansial — "
+        f"SPP dan utang. Mengintegrasikan model ke SIAK memungkinkan konselor bertindak "
+        f"sebelum mahasiswa benar-benar keluar."
     )
