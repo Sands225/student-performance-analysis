@@ -56,8 +56,8 @@ Cakupan proyek ini meliputi:
 
 ### Persiapan
 
-Dataset:
-dataset/data.csv
+Dataset:\
+[students_performance.csv](https://github.com/dicodingacademy/dicoding_dataset/blob/main/students_performance/data.csv)
 
 Setup environment:
 ```bash
