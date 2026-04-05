@@ -164,9 +164,13 @@ Menampilkan perbandingan performa keempat model yang dilatih:
 - Action plan berprioritas (High / Medium / Low)
 - Gantt chart implementation roadmap (9 bulan)
 
+## Menjalankan Sistem Machine Learning
+
+Sistem Machine Learning dapat diakses sekaligus dengan Dashboard yang telah dibuat pada page `recommendations` pada link dibawah ini.
+
 ### Link Dashboard
 
-https://student-performance-analysis-dueqjb6ymosmuvpijadgtx.streamlit.app/
+https://student-performance-analysis-rww3uavtdzm7lwjcisfmg6.streamlit.app/
 
 ## Conclusion
 
@@ -178,8 +182,35 @@ Berdasarkan hasil analisis dan pemodelan dengan klasifikasi binary (Graduate vs 
 - Status utang (debtor) yang memperparah risiko dropout
 - Usia masuk >23 tahun sebagai indikator risiko tambahan
 
-Dari empat model yang diuji, best model dipilih secara otomatis berdasarkan Test Accuracy tertinggi, sehingga dashboard selalu menggunakan model dengan performa terbaik. Model ini membantu institusi dalam melakukan deteksi dini terhadap mahasiswa yang berisiko dropout sehingga intervensi dapat dilakukan lebih cepat.
+Selain itu, dilakukan proses pelatihan dan evaluasi terhadap empat algoritma machine learning dengan skema pembagian data sebesar 80% untuk training dan 20% untuk testing menggunakan teknik *stratified sampling*. Evaluasi model juga diperkuat dengan *cross-validation* 5-fold untuk mengukur kestabilan performa.
 
+Adapun hasil performa masing-masing model adalah sebagai berikut:
+
+- **Logistic Regression**  
+  Model ini dikonfigurasi dengan parameter *max_iter = 1000* serta menggunakan proses *feature scaling* melalui *StandardScaler*. Model ini menghasilkan **Test Accuracy sebesar 0.9146** dan **CV Accuracy sebesar 0.9081**, yang menunjukkan performa yang tinggi sekaligus stabil.
+
+- **Random Forest**  
+  Dengan konfigurasi *n_estimators = 100*, model ini juga menunjukkan performa yang sangat baik dengan **Test Accuracy sebesar 0.9146** dan **CV Accuracy sebesar 0.9043**.
+
+- **Gradient Boosting**  
+  Model dengan *n_estimators = 100* ini mencatatkan **Test Accuracy sebesar 0.9118** dan **CV Accuracy sebesar 0.9053**, sehingga masih tergolong kompetitif dibandingkan model lainnya.
+
+- **Decision Tree**  
+  Model ini dibatasi menggunakan parameter *max_depth = 6*. Hasil evaluasi menunjukkan performa paling rendah di antara seluruh model, dengan **Test Accuracy sebesar 0.8981** dan **CV Accuracy sebesar 0.8888**.
+
+### Rangkuman Performa Model
+
+| Model                | Test Accuracy | CV Accuracy (5-fold) |
+|---------------------|--------------|----------------------|
+| Logistic Regression | 0.9146       | 0.9081               |
+| Random Forest       | 0.9146       | 0.9043               |
+| Gradient Boosting   | 0.9118       | 0.9053               |
+| Decision Tree       | 0.8981       | 0.8888               |
+
+
+Berdasarkan hasil evaluasi, **Logistic Regression** dan **Random Forest** memiliki nilai *Test Accuracy* tertinggi, yaitu sebesar 0.9146. Namun, **Logistic Regression** dipilih sebagai model terbaik karena memiliki nilai *Cross-Validation Accuracy* yang paling tinggi (0.9081), yang menunjukkan tingkat generalisasi dan kestabilan model yang lebih baik.
+
+Model terbaik ini kemudian diintegrasikan ke dalam sistem dashboard untuk memprediksi status kelulusan mahasiswa. Implementasi model ini diharapkan dapat membantu institusi dalam melakukan deteksi dini terhadap mahasiswa yang berisiko mengalami *dropout*, sehingga intervensi dapat dilakukan secara lebih cepat dan tepat sasaran.
 ### Rekomendasi Action Items
 
 1. **🔴 Intervensi Akademik Dini (High)**
